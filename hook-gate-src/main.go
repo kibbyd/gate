@@ -31,6 +31,7 @@ type GateState struct {
 	IsQuestion bool  `json:"is_question"`
 	SaidStop   bool  `json:"said_stop"`
 	HasAction  bool  `json:"has_action"`
+	HasGo      bool  `json:"has_go"`
 }
 
 const stateFile = "C:/gate/gate-state.json"
@@ -70,16 +71,17 @@ func main() {
 		return
 	}
 
+	// --- Rule 12: Write/Edit — only with explicit "go" signal ---
+	if input.ToolName == "Write" || input.ToolName == "Edit" {
+		if !state.HasGo {
+			deny("Rule 12: Edit/Write blocked — Commander did not say go")
+			return
+		}
+	}
+
 	// --- Rule 2: No action without explicit action signal ---
 	if !state.HasAction {
 		deny("Rule 2: no action signal detected — wait for explicit instruction")
-		return
-	}
-
-	// --- Rule 12: Write/Edit — ask Commander for approval ---
-	if input.ToolName == "Write" || input.ToolName == "Edit" {
-		filePath := input.ToolInput["file_path"]
-		ask(fmt.Sprintf("Rule 12: write requires approval — %s", filePath))
 		return
 	}
 

@@ -38,11 +38,17 @@ first_word = lower.strip().split()[0] if lower.strip() else ''
 if first_word in imperative_starts:
     has_action = True
 
+# Detect "go" signal — tight gate for Edit/Write
+go_signals = ['go', 'go on', 'go ahead', 'do it', 'proceed']
+words = lower.strip().split()
+has_go = lower.strip() in go_signals or any(sig in lower for sig in go_signals)
+
 state = {
     'prompt': prompt,
     'is_question': is_question,
     'said_stop': said_stop,
-    'has_action': has_action
+    'has_action': has_action,
+    'has_go': has_go
 }
 
 print(json.dumps(state))
