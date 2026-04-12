@@ -59,6 +59,7 @@ if [ -n "$PROMPT" ]; then
 fi
 
 # Run drift analyzer to merge drift fields into gate-state.json
-python "C:/gate/drift-analyzer.py" 2>/dev/null
+echo "--- $(date) ---" >> "C:/gate/drift-analyzer-errors.log"
+python "C:/gate/drift-analyzer.py" >> "C:/gate/drift-analyzer-errors.log" 2>&1
 
 echo "{}"
