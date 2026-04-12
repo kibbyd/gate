@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -27,14 +28,21 @@ type HookDecision struct {
 
 // GateState is written by the UserPromptSubmit hook.
 type GateState struct {
-	Prompt    string `json:"prompt"`
-	IsQuestion bool  `json:"is_question"`
-	SaidStop   bool  `json:"said_stop"`
-	HasAction  bool  `json:"has_action"`
-	HasGo      bool  `json:"has_go"`
+	Prompt          string `json:"prompt"`
+	HasTrigger      bool   `json:"has_trigger"`
+	HaltLatch       bool   `json:"halt_latch"`
+	DriftHalt       bool   `json:"drift_halt"`
+	DriftScore      int    `json:"drift_score"`
+	DriftBlockCount int    `json:"drift_block_count"`
 }
 
 const stateFile = "C:/gate/gate-state.json"
+const driftBlockThreshold = 5
+
+// gitWordRegex matches 'git' as a whole word anywhere in a command.
+// Catches 'git status', 'cd foo && git push', '; git log', etc.
+// Does NOT match 'github', 'digital', 'mygit'.
+var gitWordRegex = regexp.MustCompile(`\bgit\b`)
 
 func main() {
 	raw, err := io.ReadAll(os.Stdin)
@@ -59,74 +67,44 @@ func main() {
 	// Load state from UserPromptSubmit hook
 	state := loadState()
 
-	// --- Rule 3: STOP means freeze — block everything ---
-	if state.SaidStop {
-		deny("Rule 3: STOP — all actions frozen")
-		return
-	}
-
-	// --- Rule 1: Questions require words only — block all tools ---
-	if state.IsQuestion && !state.HasAction {
-		deny("Rule 1: question detected — respond with words only")
-		return
-	}
-
-	// --- Rule 12: Write/Edit — only with explicit "go" signal ---
-	if input.ToolName == "Write" || input.ToolName == "Edit" {
-		if !state.HasGo {
-			deny("Rule 12: Edit/Write blocked — Commander did not say go")
-			return
+	// --- Rule 2: Drift detected — either gate block count or analyzer phrase score ---
+	// Checked before other rules so drift halt fires regardless of hao presence.
+	// Uses writeDeny to avoid incrementing the counter for its own firing.
+	if state.DriftBlockCount >= driftBlockThreshold || state.DriftHalt {
+		reason := fmt.Sprintf("Rule 2: drift detected (blocks=%d) — rotate to a new instance", state.DriftBlockCount)
+		if state.DriftHalt {
+			reason = fmt.Sprintf("Rule 2: drift detected (blocks=%d, analyzer score=%d) — rotate to a new instance", state.DriftBlockCount, state.DriftScore)
 		}
-	}
-
-	// --- Rule 2: No action without explicit action signal ---
-	if !state.HasAction {
-		deny("Rule 2: no action signal detected — wait for explicit instruction")
+		writeDeny(reason)
 		return
 	}
 
-	// --- Bash-specific checks ---
+	// --- Rule 1: Halt latch — blocks everything until cleared with hao ---
+	if state.HaltLatch {
+		deny("Rule 1: halt latch active — say hao to unlock")
+		return
+	}
+
+	// --- Rule 3: No hao — only read-only tools allowed ---
+	if !state.HasTrigger {
+		deny("Rule 3: no hao in your message — only read-only tools allowed")
+		return
+	}
+
+	// --- Rule 4: Git commands require "git" in the message (hao already verified by Rule 3) ---
 	if input.ToolName == "Bash" {
-		cmd := strings.ToLower(input.ToolInput["command"])
+		cmd := strings.TrimSpace(strings.ToLower(input.ToolInput["command"]))
 		prompt := strings.ToLower(state.Prompt)
 
-		// Rule 5: Destructive git — only if Commander said "revert"
-		destructive := []string{
-			"git checkout .",
-			"git checkout --",
-			"git reset --hard",
-			"git clean",
-			"git branch -d",
-			"git branch -D",
-			"git push --force",
-			"git push -f",
-			"git restore .",
-		}
-		for _, d := range destructive {
-			if strings.Contains(cmd, strings.ToLower(d)) {
-				if !strings.Contains(prompt, "revert") {
-					deny(fmt.Sprintf("Rule 5: destructive git blocked — Commander did not say revert: %s", d))
-					return
-				}
-			}
-		}
-
-		// Rule 6: Commit and push — only if Commander instructed it
-		if strings.Contains(cmd, "git commit") {
-			if !strings.Contains(prompt, "commit") {
-				deny("Rule 6: git commit blocked — Commander did not instruct commit")
-				return
-			}
-		}
-		if strings.Contains(cmd, "git push") {
-			if !strings.Contains(prompt, "push") {
-				deny("Rule 6: git push blocked — Commander did not instruct push")
+		if gitWordRegex.MatchString(cmd) {
+			if !strings.Contains(prompt, "git") {
+				deny("Rule 4: git command blocked — requires 'git' in your message")
 				return
 			}
 		}
 	}
 
-	allow()
+	allowWithCredit()
 }
 
 func loadState() GateState {
@@ -145,7 +123,35 @@ func allow() {
 	fmt.Println("{}")
 }
 
+// allowWithCredit decrements the drift block count (floored at 0) and writes
+// an allow response. Used only by the final fall-through allow — a successful
+// gated Write/Edit/Bash earns one credit back. Read-only bypasses stay neutral.
+func allowWithCredit() {
+	state := loadState()
+	if state.DriftBlockCount > 0 {
+		state.DriftBlockCount--
+		if data, err := json.Marshal(state); err == nil {
+			_ = os.WriteFile(stateFile, data, 0644)
+		}
+	}
+	allow()
+}
+
+// deny increments the drift block count and writes a deny response.
+// Used by rules that represent real failures (Rules 1, 3, 4).
 func deny(reason string) {
+	// Increment drift block count in gate-state.json
+	state := loadState()
+	state.DriftBlockCount++
+	if data, err := json.Marshal(state); err == nil {
+		_ = os.WriteFile(stateFile, data, 0644)
+	}
+	writeDeny(reason)
+}
+
+// writeDeny writes a deny response without incrementing the drift count.
+// Used by Rule 2, which fires because of the count itself.
+func writeDeny(reason string) {
 	output := HookOutput{
 		HookSpecificOutput: &HookDecision{
 			HookEventName:            "PreToolUse",

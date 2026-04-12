@@ -1,2 +1,5 @@
 hook-gate.exe
 gate-state.json
+conversations.db*
+*.log
+__pycache__/

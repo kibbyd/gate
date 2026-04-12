@@ -4,51 +4,51 @@ INPUT=$(cat)
 STATE_FILE="C:/gate/gate-state.json"
 
 PROMPT=$(echo "$INPUT" | python -c "
-import sys, json
+import sys, json, re, os
+
+STATE_FILE = 'C:/gate/gate-state.json'
 
 d = json.load(sys.stdin)
 prompt = d.get('prompt', '')
 
-# Detect question
-is_question = '?' in prompt
+# Read previous state to preserve halt_latch and drift_block_count across messages
+previous_halt = False
+previous_block_count = 0
+if os.path.exists(STATE_FILE):
+    try:
+        with open(STATE_FILE, 'r') as f:
+            previous_state = json.load(f)
+            previous_halt = previous_state.get('halt_latch', False)
+            previous_block_count = previous_state.get('drift_block_count', 0)
+    except:
+        pass
 
-# Detect STOP
-said_stop = 'STOP' in prompt.upper().split()
+# Tokenize (whole-word tokens, case-insensitive)
+tokens = set(re.findall(r'\b\w+\b', prompt.lower()))
 
-# Detect action signals
-lower = prompt.lower()
-action_signals = ['go on', 'go ahead', 'do it', 'proceed', 'fix it', 'fix this',
-                  'build it', 'build this', 'write it', 'write this', 'update it',
-                  'update this', 'remove', 'add ', 'delete', 'change ', 'edit ',
-                  'create ', 'make ', 'run ', 'commit', 'push', 'test it',
-                  'go on then', 'yes', 'do that', 'try it', 'now',
-                  'can you write', 'can you update', 'can you fix', 'can you create',
-                  'can you edit', 'can you remove', 'can you add', 'can you make',
-                  'please', 'go', 'write a ', 'write to ']
+# --- Trigger and halt detection ---
+# 'hao' = proceed, 'tingzhi' = halt, 'kaisuo' = testing override.
+has_trigger = 'hao' in tokens
+has_halt = 'tingzhi' in tokens
+has_kaisuo = 'kaisuo' in tokens
 
-has_action = any(sig in lower for sig in action_signals)
+# Halt latch resolution — tingzhi wins over hao
+if has_halt:
+    halt_latch = True
+elif has_trigger:
+    halt_latch = False
+else:
+    halt_latch = previous_halt
 
-# Direct imperatives — starts with a verb
-imperative_starts = ['remove', 'add', 'delete', 'change', 'edit', 'create', 'make',
-                     'run', 'fix', 'update', 'write', 'build', 'commit', 'push',
-                     'show', 'read', 'get', 'put', 'set', 'move', 'copy', 'rename',
-                     'install', 'test', 'check', 'verify', 'confirm', 'try',
-                     'familiarize', 'look', 'review', 'compare', 'search', 'find']
-first_word = lower.strip().split()[0] if lower.strip() else ''
-if first_word in imperative_starts:
-    has_action = True
-
-# Detect "go" signal — tight gate for Edit/Write
-go_signals = ['go', 'go on', 'go ahead', 'do it', 'proceed']
-words = lower.strip().split()
-has_go = lower.strip() in go_signals or any(sig in lower for sig in go_signals)
+# Kaisuo override — testing-only escape hatch, resets drift block count
+if has_kaisuo:
+    previous_block_count = 0
 
 state = {
     'prompt': prompt,
-    'is_question': is_question,
-    'said_stop': said_stop,
-    'has_action': has_action,
-    'has_go': has_go
+    'has_trigger': has_trigger,
+    'halt_latch': halt_latch,
+    'drift_block_count': previous_block_count
 }
 
 print(json.dumps(state))
@@ -57,5 +57,8 @@ print(json.dumps(state))
 if [ -n "$PROMPT" ]; then
     echo "$PROMPT" > "$STATE_FILE"
 fi
+
+# Run drift analyzer to merge drift fields into gate-state.json
+python "C:/gate/drift-analyzer.py" 2>/dev/null
 
 echo "{}"

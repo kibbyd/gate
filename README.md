@@ -1,113 +1,83 @@
-# Agent Gate
+# Gate
 
-A deterministic two-hook gating system for Claude Code that enforces permission rules by analyzing the user's message before allowing tool calls.
-
-## How It Works
-
-Two hooks work together through a shared state file:
-
-1. **UserPromptSubmit hook** (`prompt-gate.sh`) — fires when the user sends a message. Analyzes the message and writes flags to `gate-state.json`:
-   - Contains `?` → `is_question = true`
-   - Contains `STOP` → `said_stop = true`
-   - Contains an action signal (go, do it, proceed, fix it, commit, push, or starts with an imperative verb) → `has_action = true`
-
-2. **PreToolUse hook** (`hook-gate.exe`) — fires before every Edit, Write, or Bash tool call. Reads the state file and enforces rules:
-
-| Rule | Condition | Decision |
-|------|-----------|----------|
-| Rule 1 | Question detected, no action signal | **deny** — respond with words only |
-| Rule 2 | No action signal in user's message | **deny** — wait for explicit instruction |
-| Rule 3 | User said STOP | **deny** — all actions frozen |
-| Rule 5 | Destructive git command without "revert" in message | **deny** |
-| Rule 6 | git commit/push without "commit"/"push" in message | **deny** |
-| Rule 12 | Any Write or Edit tool call | **ask** — prompts user for approval |
-
-Read-only tools (Read, Glob, Grep, ToolSearch, Agent) always pass.
-
-## Setup
-
-### 1. Install Go
-
-The gate binary is written in Go. Install from https://go.dev/dl/
-
-### 2. Build the binary
-
-```
-cd C:\gate\hook-gate-src
-go build -o C:\gate\hook-gate.exe .
-```
-
-### 3. Configure hooks
-
-Add to `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"C:/gate/hook-gate-src/prompt-gate.sh\"",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Edit|Write|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "C:/gate/hook-gate.exe",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-### 4. Python dependency
-
-`prompt-gate.sh` uses Python to parse the user's message. Python 3 must be on PATH.
+Deterministic PreToolUse gate for Claude Code. Blocks Write/Edit/Bash tool calls unless Commander has explicitly authorized action. Counts instance drift in real time and halts drifted instances.
 
 ## Files
 
+| File | Role |
+|---|---|
+| `hook-gate-src/main.go` | Gate binary source — rules 1–4, allow/deny, drift counter mutation |
+| `hook-gate-src/prompt-gate.sh` | UserPromptSubmit hook — detects signal words, writes `gate-state.json` |
+| `hook-gate-src/go.mod` | Go module |
+| `hook-gate.exe` | Compiled binary (built from `hook-gate-src/`) |
+| `drift-analyzer.py` | Reads `conversations.db`, scores drift phrases in last 10 messages, writes drift fields to `gate-state.json` |
+| `conversation_logger_server.py` | `ConversationIndexer` — pulls Claude Code JSONL transcripts into `conversations.db` |
+| `gate-state.json` | Runtime state — shared by prompt hook, gate binary, and drift analyzer |
+| `conversations.db` | SQLite index of JSONL transcripts (runtime, regenerates) |
+
+## Signal vocabulary
+
+Single Mandarin tokens, chosen so they never appear in conversational English.
+
+- **`hao`** (好 — good) — the only action signal. Presence as a whole token unlocks Write/Edit/Bash for that message. Without `hao`, only read-only tools work.
+- **`tingzhi`** (停止 — halt) — sticky halt. Sets `halt_latch = true` in state. Persists across messages until cleared by `hao`.
+- **`kaisuo`** (开锁 — unlock) — testing override. Resets `drift_block_count` to 0 for one turn and forces `drift_halt = false`. For test use only.
+
+## Rules
+
+The gate runs on every Write/Edit/Bash tool call. Read-only tools (`Read`, `Glob`, `Grep`, `ToolSearch`, `Agent`) and MCP tools bypass it entirely. Rules fire in order; first match wins.
+
+| # | Rule | Condition | Behavior |
+|---|---|---|---|
+| 2 | Drift halt | `drift_block_count >= 5` OR `drift_halt == true` | `writeDeny` — does **not** increment counter. Instance is spent, rotate. |
+| 1 | Halt latch | `halt_latch == true` | `deny` — increments counter. Say `hao` (without `tingzhi`) to clear. |
+| 3 | No `hao` | `has_trigger == false` | `deny` — increments counter. |
+| 4 | Git command | Bash command matches `\bgit\b` and `"git"` not in prompt | `deny` — increments counter. |
+
+Rule 2 runs first so a spent instance cannot act even with `hao` present.
+
+## Drift detection
+
+Two independent signals, either crosses → block.
+
+**Source A — gate-side real-time counter (`drift_block_count`)**
+- Maintained by `main.go`. Every `deny()` increments. Every successful gated `allowWithCredit()` decrements (floor 0).
+- Counts actual unauthorized action attempts. No lag, no semantic matching.
+- Threshold: 5.
+
+**Source B — analyzer-side phrase score (`drift_score` + `drift_halt`)**
+- Maintained by `drift-analyzer.py`. Runs on every `UserPromptSubmit` via `prompt-gate.sh`.
+- Indexes JSONL into `conversations.db` (via `ConversationIndexer`), reads last 10 messages of latest session, counts occurrences of entries in `DRIFT_PHRASES` across assistant messages plus `"gate blocked"` in user tool_results.
+- Natural counter-balance: clean conversation pushes drift phrases out of the 10-message window → score drops on its own.
+- Threshold: 5.
+
+## State file
+
+`gate-state.json` fields:
+
+```json
+{
+  "prompt": "<last user message>",
+  "has_trigger": false,
+  "halt_latch": false,
+  "drift_halt": false,
+  "drift_score": 0,
+  "drift_block_count": 0
+}
 ```
-C:\gate\
-  hook-gate.exe          — compiled Go binary (PreToolUse hook)
-  gate-state.json        — shared state file (auto-generated at runtime)
-  README.md              — this file
-  hook-gate-src\
-    main.go              — Go source for the PreToolUse hook
-    go.mod               — Go module file
-    prompt-gate.sh       — UserPromptSubmit hook (analyzes user message)
+
+Written by `prompt-gate.sh` (prompt, has_trigger, halt_latch, drift_block_count preservation), merged by `drift-analyzer.py` (drift_halt, drift_score, drift_signals), mutated by `hook-gate.exe` (drift_block_count ± on each gated call).
+
+## Build
+
+```bash
+cd hook-gate-src
+go build -o ../hook-gate.exe
 ```
 
-## How Decisions Work
+## Install (Claude Code hooks)
 
-The gate is deterministic — no semantic matching, no vector databases, no fuzzy logic.
+Register in Claude Code `settings.json` under `hooks`:
 
-- **Hard deny**: destructive git and commit/push are blocked unless the user's message explicitly contains the relevant instruction ("revert", "commit", "push")
-- **Ask**: all file writes and edits prompt the user for approval before proceeding
-- **Conversation-aware**: the gate reads the user's actual message to determine intent, not just the tool call parameters
-
-The user is always in control. The gate enforces that Claude acts only when explicitly instructed.
-
-## Customization
-
-### Adding action signals
-
-Edit the `action_signals` list and `imperative_starts` list in `prompt-gate.sh`.
-
-### Changing the state file path
-
-Update `STATE_FILE` in `prompt-gate.sh` and `stateFile` in `main.go`, then rebuild.
-
-### Adding new rules
-
-Add new check functions in `main.go` and rebuild with `go build`.
+- `PreToolUse` → `C:/gate/hook-gate.exe`
+- `UserPromptSubmit` → `C:/gate/hook-gate-src/prompt-gate.sh`
