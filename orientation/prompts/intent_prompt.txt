@@ -1,0 +1,5 @@
+From this function name and docstring:
+
+{code_snippet}
+
+List 3-5 natural language phrases users might say to trigger it, e.g. "create a new project". Output ONLY JSON array: ["phrase1", "phrase2"].

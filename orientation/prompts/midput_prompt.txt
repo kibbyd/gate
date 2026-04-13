@@ -1,0 +1,5 @@
+You are a senior dev documenting code. Given this function signature, docstring, and call chain:
+
+{code_snippet}
+
+Write a concise array of 3-7 steps describing exactly what happens inside (midput). Use numbered steps like "1. Validate input X", "2. Call Y → handle Z". Focus on side effects, DB ops, external calls. Keep each step <20 words. Output ONLY the JSON array, e.g. ["1. Step one", "2. Step two"].

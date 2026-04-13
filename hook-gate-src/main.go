@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // HookInput matches the JSON Claude Code sends to PreToolUse hooks.
@@ -37,7 +38,8 @@ type GateState struct {
 }
 
 const stateFile = "C:/gate/gate-state.json"
-const driftBlockThreshold = 5
+const incidentLog = "C:/gate/drift-incidents.log"
+const driftBlockThreshold = 2
 
 // gitWordRegex matches 'git' as a whole word anywhere in a command.
 // Catches 'git status', 'cd foo && git push', '; git log', etc.
@@ -75,18 +77,21 @@ func main() {
 		if state.DriftHalt {
 			reason = fmt.Sprintf("Rule 2: drift detected (blocks=%d, analyzer score=%d) — rotate to a new instance", state.DriftBlockCount, state.DriftScore)
 		}
+		logIncident(reason, input, state)
 		writeDeny(reason)
 		return
 	}
 
 	// --- Rule 1: Halt latch — blocks everything until cleared with hao ---
 	if state.HaltLatch {
+		logIncident("Rule 1: halt latch active", input, state)
 		deny("Rule 1: halt latch active — say hao to unlock")
 		return
 	}
 
 	// --- Rule 3: No hao — only read-only tools allowed ---
 	if !state.HasTrigger {
+		logIncident("Rule 3: no hao", input, state)
 		deny("Rule 3: no hao in your message — only read-only tools allowed")
 		return
 	}
@@ -98,13 +103,14 @@ func main() {
 
 		if gitWordRegex.MatchString(cmd) {
 			if !strings.Contains(prompt, "git") {
+				logIncident("Rule 4: git without 'git' in message", input, state)
 				deny("Rule 4: git command blocked — requires 'git' in your message")
 				return
 			}
 		}
 	}
 
-	allowWithCredit()
+	allow()
 }
 
 func loadState() GateState {
@@ -121,20 +127,6 @@ func loadState() GateState {
 
 func allow() {
 	fmt.Println("{}")
-}
-
-// allowWithCredit decrements the drift block count (floored at 0) and writes
-// an allow response. Used only by the final fall-through allow — a successful
-// gated Write/Edit/Bash earns one credit back. Read-only bypasses stay neutral.
-func allowWithCredit() {
-	state := loadState()
-	if state.DriftBlockCount > 0 {
-		state.DriftBlockCount--
-		if data, err := json.Marshal(state); err == nil {
-			_ = os.WriteFile(stateFile, data, 0644)
-		}
-	}
-	allow()
 }
 
 // deny increments the drift block count and writes a deny response.
@@ -161,6 +153,38 @@ func writeDeny(reason string) {
 	}
 	data, _ := json.Marshal(output)
 	fmt.Println(string(data))
+}
+
+// logIncident appends a deny event to the drift incident log.
+// Survives instance rotation so Commander or the next instance can review.
+func logIncident(rule string, input HookInput, state GateState) {
+	toolSummary := input.ToolName
+	if input.ToolName == "Bash" {
+		cmd := input.ToolInput["command"]
+		if len(cmd) > 200 {
+			cmd = cmd[:200]
+		}
+		toolSummary = fmt.Sprintf("Bash: %s", cmd)
+	} else if input.ToolName == "Write" || input.ToolName == "Edit" {
+		path := input.ToolInput["file_path"]
+		toolSummary = fmt.Sprintf("%s: %s", input.ToolName, path)
+	}
+	prompt := state.Prompt
+	if len(prompt) > 200 {
+		prompt = prompt[:200]
+	}
+	entry := fmt.Sprintf("[%s] %s | %s | blocks=%d | prompt: %s\n",
+		time.Now().Format("2006-01-02 15:04:05"),
+		rule,
+		toolSummary,
+		state.DriftBlockCount,
+		prompt,
+	)
+	f, err := os.OpenFile(incidentLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err == nil {
+		defer f.Close()
+		f.WriteString(entry)
+	}
 }
 
 func ask(reason string) {

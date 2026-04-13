@@ -29,7 +29,7 @@ The gate runs on every Write/Edit/Bash tool call. Read-only tools (`Read`, `Glob
 
 | # | Rule | Condition | Behavior |
 |---|---|---|---|
-| 2 | Drift halt | `drift_block_count >= 5` OR `drift_halt == true` | `writeDeny` — does **not** increment counter. Instance is spent, rotate. |
+| 2 | Drift halt | `drift_block_count >= 2` OR `drift_halt == true` | `writeDeny` — does **not** increment counter. Logs incident. Instance is spent, rotate. |
 | 1 | Halt latch | `halt_latch == true` | `deny` — increments counter. Say `hao` (without `tingzhi`) to clear. |
 | 3 | No `hao` | `has_trigger == false` | `deny` — increments counter. |
 | 4 | Git command | Bash command matches `\bgit\b` and `"git"` not in prompt | `deny` — increments counter. |
@@ -41,15 +41,19 @@ Rule 2 runs first so a spent instance cannot act even with `hao` present.
 Two independent signals, either crosses → block.
 
 **Source A — gate-side real-time counter (`drift_block_count`)**
-- Maintained by `main.go`. Every `deny()` increments. Every successful gated `allowWithCredit()` decrements (floor 0).
+- Maintained by `main.go`. Every `deny()` increments. No decrement — blocks are sticky.
 - Counts actual unauthorized action attempts. No lag, no semantic matching.
-- Threshold: 5.
+- Threshold: 2.
 
 **Source B — analyzer-side phrase score (`drift_score` + `drift_halt`)**
 - Maintained by `drift-analyzer.py`. Runs on every `UserPromptSubmit` via `prompt-gate.sh`.
-- Indexes JSONL into `conversations.db` (via `ConversationIndexer`), reads last 10 messages of latest session, counts occurrences of entries in `DRIFT_PHRASES` across assistant messages plus `"gate blocked"` in user tool_results.
+- Indexes JSONL into `conversations.db` (via `ConversationIndexer`), reads last 10 messages of latest session, counts occurrences of entries in `DRIFT_PHRASES` (28 phrases) across assistant messages plus `"gate blocked"` in user tool_results.
 - Natural counter-balance: clean conversation pushes drift phrases out of the 10-message window → score drops on its own.
-- Threshold: 5.
+- Threshold: 2.
+
+**Incident log (`drift-incidents.log`)**
+- Every deny event logs: timestamp, rule, tool attempted, tool input summary, block count, and prompt context.
+- Survives instance rotation — next instance or Commander can review what went wrong.
 
 ## State file
 
@@ -66,7 +70,7 @@ Two independent signals, either crosses → block.
 }
 ```
 
-Written by `prompt-gate.sh` (prompt, has_trigger, halt_latch, drift_block_count preservation), merged by `drift-analyzer.py` (drift_halt, drift_score, drift_signals), mutated by `hook-gate.exe` (drift_block_count ± on each gated call).
+Written by `prompt-gate.sh` (prompt, has_trigger, halt_latch, drift_block_count preservation), merged by `drift-analyzer.py` (drift_halt, drift_score, drift_signals), incremented by `hook-gate.exe` on each deny.
 
 ## Build
 

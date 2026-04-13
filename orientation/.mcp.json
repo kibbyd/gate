@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "orientation": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "C:\\Users\\danie\\orientation\\mcp_server.py"
+      ],
+      "env": {}
+    }
+  }
+}

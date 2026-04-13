@@ -1,0 +1,5 @@
+From this function and its effects:
+
+{code_snippet}
+
+Generate 2-4 agentHints as short strings, e.g. "Call this after user login", "Avoid if offline". Think like a helpful orchestrator. Output ONLY JSON array: ["hint1", "hint2"].

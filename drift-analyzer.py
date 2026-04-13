@@ -30,10 +30,11 @@ STATE_FILE = GATE_DIR / "gate-state.json"
 WINDOW_SIZE = 10
 
 # Threshold: drift_halt = True when drift_score >= this
-DRIFT_THRESHOLD = 5
+DRIFT_THRESHOLD = 3
 
 # Deterministic drift phrases to count in assistant messages (lowercase)
 DRIFT_PHRASES = [
+    # Verbose narrator drift
     "let me",
     "i could also",
     "i might also",
@@ -49,6 +50,20 @@ DRIFT_PHRASES = [
     "stepping back",
     "on reflection",
     "reconsidering",
+    # Scope creep / unsolicited initiative
+    "i'll also",
+    "i've also",
+    "we should also",
+    "i should also",
+    "one more thing",
+    "while we're at it",
+    "before we do that",
+    "it would be good to",
+    "i noticed",
+    "i'll go ahead",
+    "to be safe",
+    # Post-drift signals
+    "i apologize",
 ]
 
 
