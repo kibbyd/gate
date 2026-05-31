@@ -38,6 +38,7 @@ class UniversalScanner:
         '.mypy_cache',
         'vendor',
         'bower_components',
+        'data',
     }
 
     # Binary and non-source file extensions to skip
@@ -49,6 +50,7 @@ class UniversalScanner:
         '.pdf', '.doc', '.docx', '.xls', '.xlsx',
         '.zip', '.tar', '.gz', '.rar', '.7z',
         '.lock', '.log',
+        '.db',
     }
 
     def __init__(self, verbose: bool = True):

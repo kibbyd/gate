@@ -1,0 +1,33 @@
+{
+  "model": "claude-opus-4-8",
+  "enabledMcpjsonServers": [
+    "orientation"
+  ],
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"C:/gate/hook-gate-src/prompt-gate.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|Bash|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:/gate/hook-gate.exe",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "effortLevel": "high",
+  "verbose": false
+}

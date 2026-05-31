@@ -328,7 +328,7 @@ class PluginManager:
             # Skip common directories
             dirs[:] = [d for d in dirs if d not in {
                 '__pycache__', '.git', '.venv', 'venv', 'node_modules',
-                'dist', 'build', 'target', '.next', '.nuxt'
+                'dist', 'build', 'target', '.next', '.nuxt', 'data'
             }]
 
             for file in files:

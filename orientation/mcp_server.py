@@ -434,7 +434,7 @@ def main():
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "result": {
-                        "protocolVersion": "2025-11-25",
+                        "protocolVersion": "2024-11-05",
                         "capabilities": {"tools": {}},
                         "serverInfo": {
                             "name": "orientation",
@@ -493,6 +493,10 @@ def main():
                             "message": f"Tool execution error: {str(e)}"
                         }
                     }
+
+            elif method and method.startswith("notifications/"):
+                # Notifications have no id — don't respond
+                continue
 
             else:
                 response = {

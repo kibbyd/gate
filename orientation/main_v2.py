@@ -262,7 +262,8 @@ def generate_appmap(project_dir: str, template_name: str = None, universal: bool
         if results.get('classes'):
             appmap_template['classes'] = results['classes']
 
-        if results.get('components'):
+        detected_fw = results.get('metadata', {}).get('detected_frameworks', [])
+        if results.get('components') and 'react' in detected_fw:
             if 'react' not in appmap_template:
                 appmap_template['react'] = {'components': [], 'customHooks': [], 'globalState': []}
             appmap_template['react']['components'] = results['components']
