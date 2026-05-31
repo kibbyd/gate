@@ -11,21 +11,15 @@ STATE_FILE = 'C:/gate/gate-state.json'
 d = json.load(sys.stdin)
 prompt = d.get('prompt', '')
 
-# Read previous state to preserve halt_latch, drift_block_count, and mode across messages
+# Read previous state to preserve halt_latch and drift_block_count across messages
 previous_halt = False
 previous_block_count = 0
-previous_mode = 1
-previous_gate_off = False
-previous_strict_roots = []
 if os.path.exists(STATE_FILE):
     try:
         with open(STATE_FILE, 'r') as f:
             previous_state = json.load(f)
             previous_halt = previous_state.get('halt_latch', False)
             previous_block_count = previous_state.get('drift_block_count', 0)
-            previous_mode = previous_state.get('mode', 1)
-            previous_gate_off = previous_state.get('gate_off', False)
-            previous_strict_roots = previous_state.get('gate_strict_roots', [])
     except:
         pass
 
@@ -33,10 +27,10 @@ if os.path.exists(STATE_FILE):
 tokens = set(re.findall(r'\b\w+\b', prompt.lower()))
 
 # --- Trigger and halt detection ---
-# 'hao' = proceed, 'tingzhi' = halt
+# 'hao' = proceed, 'tingzhi' = halt, 'kaisuo' = testing override.
 has_trigger = 'hao' in tokens
 has_halt = 'tingzhi' in tokens
-has_gate_off = 'hao' in tokens and 'de' in tokens
+has_kaisuo = 'kaisuo' in tokens
 
 # Halt latch resolution — tingzhi wins over hao
 if has_halt:
@@ -46,45 +40,22 @@ elif has_trigger:
 else:
     halt_latch = previous_halt
 
-# hao resets drift block count — re-authorization clears the slate
-if has_trigger:
+# Kaisuo override — testing-only escape hatch, resets drift block count
+if has_kaisuo:
     previous_block_count = 0
-
-# Gate off: 'hao de' opens gate fully, 'hao' (without de) closes it
-if has_gate_off:
-    gate_off = True
-elif has_trigger:
-    gate_off = False
-else:
-    gate_off = previous_gate_off
-
-# Mode: 1 = extracting (default), 2 = applying (hao activates)
-# Mode persists until [DONE] resets it (handled by drift-analyzer)
-mode = previous_mode
-if has_trigger:
-    mode = 2
-
-has_question = '?' in prompt
 
 state = {
     'prompt': prompt,
     'has_trigger': has_trigger,
-    'has_question': has_question,
     'halt_latch': halt_latch,
-    'drift_block_count': previous_block_count,
-    'mode': mode,
-    'gate_off': gate_off,
-    'gate_strict_roots': previous_strict_roots
+    'drift_block_count': previous_block_count
 }
 
 print(json.dumps(state))
-" 2>>"C:/gate/prompt-gate-errors.log")
+" 2>/dev/null)
 
 if [ -n "$PROMPT" ]; then
     echo "$PROMPT" > "$STATE_FILE"
-else
-    # Python failed — write safe fallback state
-    echo '{"prompt":"","has_trigger":false,"halt_latch":false,"drift_block_count":0,"mode":1}' > "$STATE_FILE"
 fi
 
 # Run drift analyzer to merge drift fields into gate-state.json
